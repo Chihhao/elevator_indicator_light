@@ -8,7 +8,7 @@
 ![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/S__10305577_0.jpg)
 ![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/S__10305580_0.jpg)
 ![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/IMG_6718.jpg)
-![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/test.jpg)
+![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/test.gif)
 
 ## 材料
 | 材料           | 成本 |
@@ -26,5 +26,6 @@
 | **總計**       | $600 |
 
 ## Other
-![image](https://hackmd.io/_uploads/HyCjQ7fon.png)
+![image](https://github.com/Chihhao/elevator_indicator_light/blob/main/image/led.png)
+
 
