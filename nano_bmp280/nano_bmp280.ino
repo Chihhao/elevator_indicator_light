@@ -1,20 +1,22 @@
 #include <SPI.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SH1106.h>
 #include <SFE_BMP180.h>
 
 //#define DEBUG
+#define ENABLE_OLED
 
-#define OLED_RESET 4
+#ifdef ENABLE_OLED
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SH1106.h>
+  #define OLED_RESET 4
+  Adafruit_SH1106 display(OLED_RESET);
+#endif
 
-// 當電梯在任一樓層超過30秒，執行重新校正
-#define WAIT_TIME_TO_CAL 30000  //30s
+// 當電梯在任一樓層超過15秒，執行重新校正
+#define WAIT_TIME_TO_CAL 15000  //15s
 
-#define BASE_HIGH   3.4
-#define FLOOR_HIGH  4.7
-
-Adafruit_SH1106 display(OLED_RESET);
+#define BASE_HIGH   3.0
+#define FLOOR_HIGH  4.6
 SFE_BMP180 bmp180;
 
 int floorNo = -99;
@@ -38,8 +40,10 @@ void setup()   {
   Serial.println(F("==========DEBUG MODE=========="));
 #endif
 
+#ifdef ENABLE_OLED
   display.begin(SH1106_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
   display.clearDisplay();
+#endif
 
   // 初始設定
   if (bmp180.begin())
@@ -48,8 +52,10 @@ void setup()   {
   {
     // 初始化錯誤，一般是連接問題
     Serial.println(F("BMP180 init fail\n\n"));
+#ifdef ENABLE_OLED
     display.println(F("BMP180 init fail"));
     display.display();    
+#endif
     while(1);    // 永久停在這裡
   }
 
@@ -282,14 +288,13 @@ void loop(){
             // 設定現在樓層，開始計時，檢查是否需要重新校正
             SetFloor(_floor);
           
-            // 顯示          
-            ShowOLED(_floor, 0, _distance);            
+            // 顯示                     
+            ShowOLED(_floor, 0, _distance);           
             delay(200);  
         }
     }
-  
-#else
- 
+      
+#else 
     // 取得 現在壓力
     double _pressure = GetPressure();
     if(_pressure<900 || _pressure>1100){
@@ -319,18 +324,12 @@ void loop(){
     //ShowOLED(_floor, _pressure, _distance);
     ShowOLED(_floor, 0, _distance);
       
-    delay(200);  
- 
-
-#endif
-  
-  
-  
-  
+    delay(200); 
+#endif  
 }
 
 void ShowOLED(int _floor, double _pressure, double _distance){
-
+#ifdef ENABLE_OLED 
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(WHITE);
@@ -374,6 +373,7 @@ void ShowOLED(int _floor, double _pressure, double _distance){
     display.println();    
       
     display.display();  
+#endif
 }
 
 double GetDistance(double _pressure){
