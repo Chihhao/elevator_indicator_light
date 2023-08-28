@@ -3,7 +3,7 @@
 #include <SFE_BMP180.h>
 
 //#define DEBUG
-#define ENABLE_OLED
+//#define ENABLE_OLED
 
 #ifdef ENABLE_OLED
   #include <Adafruit_GFX.h>
@@ -12,18 +12,49 @@
   Adafruit_SH1106 display(OLED_RESET);
 #endif
 
-// 當電梯在任一樓層超過15秒，執行重新校正
-#define WAIT_TIME_TO_CAL 15000  //15s
+// 當電梯在任一樓層超過30秒，執行重新校正
+#define WAIT_TIME_TO_CAL 30000  //30s
 
-#define BASE_HIGH   3.0
-#define FLOOR_HIGH  4.6
 SFE_BMP180 bmp180;
 
-int floorNo = -99;
+int currentFloorNo = -99;
 unsigned long timerStartTime=0;
 
-int stdFloorNo = 1;
-double stdPressure = 1000;
+int stdFloorNo = 6;
+double stdPressure;
+
+// 樓層資訊
+struct Floor {
+  int number;
+  float distance;
+};
+
+const int numFloors = 11;  // 總樓層數
+const float B2_B1_DISTANCE = 2.6;
+const float B1_1F_DISTANCE = 4.5;
+const float _1F_2F_DISTANCE = 3.5;
+const float _2F_3F_DISTANCE = 4.6;
+const float _3F_4F_DISTANCE = 4.6;
+const float _4F_5F_DISTANCE = 4.7;
+const float _5F_6F_DISTANCE = 4.7;
+const float _6F_7F_DISTANCE = 4.7;
+const float _7F_8F_DISTANCE = 4.7;
+const float _8F_9F_DISTANCE = 4.6;
+
+Floor floors[numFloors] = {
+  {-1, 0.0},
+  {0, B2_B1_DISTANCE},
+  {1, B2_B1_DISTANCE + B1_1F_DISTANCE},
+  {2, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE},
+  {3, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE},
+  {4, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE},
+  {5, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE},
+  {6, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE + _5F_6F_DISTANCE},
+  {7, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE + _5F_6F_DISTANCE + _6F_7F_DISTANCE},
+  {8, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE + _5F_6F_DISTANCE + _6F_7F_DISTANCE + _7F_8F_DISTANCE},
+  {9, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE + _5F_6F_DISTANCE + _6F_7F_DISTANCE + _7F_8F_DISTANCE + _8F_9F_DISTANCE}
+};
+
 
 void setup()   {     
   pinMode(3, OUTPUT);
@@ -61,11 +92,10 @@ void setup()   {
 
   // 取得初始壓力 (設備必須在1F重新啟動)
   stdPressure = GetPressure();
-  stdFloorNo = 1;
   Serial.print(F("Reset stdPressure = "));
   Serial.println(stdPressure, 2);
-  Serial.println(F("Reset stdFloorNo = 1"));
- 
+  Serial.print(F("Reset stdFloorNo = "));
+  Serial.println(stdFloorNo);
 }
 
 void Show7Led(int _no){
@@ -172,16 +202,25 @@ void Show7Led(int _no){
 }
 
 double GetPressure(){
-  const int TIMES = 6;
-  double _P = 0;
-  double _total = 0;
-  for(int i=0; i<TIMES; i++){
-    _total += GetPressureSingle();
-  }
-  _P = _total / (double)TIMES ;
-  Serial.print(F("Get Avg pressure: "));
-  Serial.println(_P);   
-  return _P;  
+    const int TIMES = 20;  
+    double _total = 0;
+    int cnt = 0;
+    while(cnt < TIMES){
+        double _p = GetPressureSingle();   
+        if(_p>900 && _p<1100){
+            _total += _p;
+            cnt++;
+        }
+        delay(3);
+    }
+//    for(int i=0; i<TIMES; i++){   
+//        _total += GetPressureSingle();        
+//        delay(5);
+//    }
+    double outputP = _total / (double)TIMES ;
+    Serial.print(F("Get Avg pressure: "));
+    Serial.println(outputP);   
+    return outputP;  
 }
 
 double GetPressureSingle(){
@@ -212,66 +251,57 @@ double GetPressureSingle(){
   return _P;
 }
 
-int GetFloor(double _distance){
-	// input: 目標高度 與 標準樓層 的距離
-	// output: 目標樓層
-	
-	// 因為地下室樓高只有3.4m(估)，與樓高4.7m不同，所以這裡有一點複雜
-	
-	int _floor = -2;
-	double distance_1F = 0;
-	double distance_B1 = 0;
-	double distance_B2 = 0;		
+int GetFloor(float distance) {
+  int currentIdx = -1;
 
-  {  // 計算 distance_1F, distance_B1, distance_B2
-  	if(stdFloorNo >= 1){ // 1F (含)以上		
-  		distance_1F = 0 - FLOOR_HIGH * (stdFloorNo - 1);
-  		distance_B1 = distance_1F - BASE_HIGH;	
-  		distance_B2 = distance_1F - BASE_HIGH * 2;	
-  	}
-  	else if(stdFloorNo == 0){  // B1
-  		distance_1F = BASE_HIGH;
-  		distance_B1 = 0;
-  		distance_B2 = -BASE_HIGH;		
-  	}
-  	else if(stdFloorNo == -1){ // B2 		
-  		distance_1F = BASE_HIGH * 2;	
-  		distance_B1 = BASE_HIGH;
-  		distance_B2 = 0;			
-  	}
-  	else{ // Error		
-  		Serial.println(F("Get Floor Error"));
-  		return -2;
-  	}	
+  // 尋找標準樓層的索引
+  for (int i = 0; i < numFloors; i++) {
+    if (floors[i].number == stdFloorNo) {
+      currentIdx = i;
+      break;
+    }
   }
 
-	if(_distance >= distance_1F ){  // 目標樓高 >= 1F	
-    if(stdFloorNo >= 1){ // 標準 樓高 >= 1F
-      _floor = stdFloorNo + round(_distance/FLOOR_HIGH);    
+  // 計算目標樓層的索引
+  int targetIdx = currentIdx;
+  float remainingDistance = distance;
+  // Serial.print("targetIdx: ");    Serial.println(targetIdx);
+  // Serial.print("remainingDistance: ");    Serial.println(remainingDistance);
+  
+  if (distance > 0) {
+    for (int i = currentIdx + 1; i < numFloors; i++) {
+      float floorHeight = floors[i].distance - floors[i - 1].distance;
+      if (remainingDistance >= floorHeight / 2) {
+        remainingDistance -= floorHeight;
+        targetIdx++;
+        // Serial.print("targetIdx: ");    Serial.println(targetIdx);
+        // Serial.print("remainingDistance: ");    Serial.println(remainingDistance);
+      } else {
+        break;
+      }
     }
-    else if(stdFloorNo == 0) {  // 標準 樓高 = B1
-      double _d = _distance - BASE_HIGH;      
-      _floor = 1 + round(_d/FLOOR_HIGH);
-    } 
-    else if(stdFloorNo == -1) {  // 標準 樓高 = B2
-      double _d = _distance - BASE_HIGH*2;      
-      _floor = 1 + round(_d/FLOOR_HIGH);
+  } else {
+    for (int i = currentIdx - 1; i >= 0; i--) {
+      float floorHeight = floors[i + 1].distance - floors[i].distance;
+      if (-remainingDistance >= floorHeight / 2) {
+        remainingDistance += floorHeight;
+        targetIdx--;
+        // Serial.print("targetIdx: ");    Serial.println(targetIdx);
+        // Serial.print("remainingDistance: ");    Serial.println(remainingDistance);
+      } else {
+        break;
+      }
     }
-	}
-	else { // 目標 是地下室			
-		if(stdFloorNo >= 1){ // 標準 樓高 >= 1F	
-			// 扣掉目標到 1F 的距離
-			double _d = _distance + FLOOR_HIGH * (stdFloorNo-1);			
-			_floor = 1 + round(_d/BASE_HIGH);		
-		}   
-		else {  // 標準 是地下室			
-			_floor = stdFloorNo + round(_distance/BASE_HIGH);				
-		}
-	}
-	
-	Serial.print(F("Get Floor: "));
-  Serial.println(_floor);   
-	return _floor;
+  }
+
+  if (targetIdx < 0) {
+    targetIdx = 0;
+  } else if (targetIdx >= numFloors) {
+    targetIdx = numFloors - 1;
+  }
+  
+  // Serial.print("adj targetIdx: ");    Serial.println(targetIdx);
+  return floors[targetIdx].number;
 }
 
 void loop(){
@@ -321,8 +351,8 @@ void loop(){
   
     // 顯示
     Show7Led(_floor);
-    //ShowOLED(_floor, _pressure, _distance);
-    ShowOLED(_floor, 0, _distance);
+    ShowOLED(_floor, _pressure, _distance);
+    //ShowOLED(_floor, 0, _distance);
       
     delay(200); 
 #endif  
@@ -346,9 +376,9 @@ void ShowOLED(int _floor, double _pressure, double _distance){
     }
     
     display.println();    
-    display.print("STD Presr: ");  
-    display.print(stdPressure);  
-    display.println();    
+//    display.print("STD Presr: ");  
+//    display.print(stdPressure);  
+//    display.println();    
 
     display.println();    
     
@@ -363,9 +393,9 @@ void ShowOLED(int _floor, double _pressure, double _distance){
     }  
     display.println(); 
     
-    display.print("Now Presr: ");  
-    display.print(_pressure);  
-    display.println();    
+//    display.print("Now Presr: ");  
+//    display.print(_pressure);  
+//    display.println();    
     
     display.print("Distance:  ");  
     display.print(_distance);  
@@ -385,8 +415,8 @@ double GetDistance(double _pressure){
 }
 
 void SetFloor(int _floor){
-  if(_floor != floorNo){
-    floorNo = _floor;
+  if(_floor != currentFloorNo){
+    currentFloorNo = _floor;
     TimerReStart();    
   }
   else {
