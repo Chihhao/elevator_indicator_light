@@ -1,21 +1,12 @@
 #include <SPI.h>
 #include <Wire.h>
-#include <SFE_BMP180.h>
-
-//#define DEBUG
-//#define ENABLE_OLED
-
-#ifdef ENABLE_OLED
-  #include <Adafruit_GFX.h>
-  #include <Adafruit_SH1106.h>
-  #define OLED_RESET 4
-  Adafruit_SH1106 display(OLED_RESET);
-#endif
+#include <Adafruit_Sensor.h>
+#include "Adafruit_BMP3XX.h"  // https://github.com/adafruit/Adafruit_BMP3XX
 
 // 當電梯在任一樓層超過30秒，執行重新校正
 #define WAIT_TIME_TO_CAL 30000  //30s
 
-SFE_BMP180 bmp180;
+Adafruit_BMP3XX bmp;
 
 int currentFloorNo = -99;
 unsigned long timerStartTime=0;
@@ -55,7 +46,6 @@ Floor floors[numFloors] = {
   {9, B2_B1_DISTANCE + B1_1F_DISTANCE + _1F_2F_DISTANCE + _2F_3F_DISTANCE + _3F_4F_DISTANCE + _4F_5F_DISTANCE + _5F_6F_DISTANCE + _6F_7F_DISTANCE + _7F_8F_DISTANCE + _8F_9F_DISTANCE}
 };
 
-
 void setup()   {     
   pinMode(3, OUTPUT);
   pinMode(4, OUTPUT);
@@ -65,28 +55,21 @@ void setup()   {
   pinMode(8, OUTPUT);
   pinMode(9, OUTPUT);
   
-  Serial.begin(9600);
-
-#ifdef DEBUG
-  Serial.println(F("==========DEBUG MODE=========="));
-#endif
-
-#ifdef ENABLE_OLED
-  display.begin(SH1106_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3D (for the 128x64)
-  display.clearDisplay();
-#endif
+  Serial.begin(115200);
 
   // 初始設定
-  if (bmp180.begin())
-    Serial.println(F("BMP180 init success"));
-  else
-  {
+  if (bmp.begin_I2C()){    
+    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_8X);
+    bmp.setPressureOversampling(BMP3_OVERSAMPLING_4X);
+    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_127);
+    bmp.setOutputDataRate(BMP3_ODR_50_HZ);  
+    bmp.performReading();
+    delay(30);
+    Serial.println(F("BMP390 init success"));
+  }
+  else{
     // 初始化錯誤，一般是連接問題
-    Serial.println(F("BMP180 init fail\n\n"));
-#ifdef ENABLE_OLED
-    display.println(F("BMP180 init fail"));
-    display.display();    
-#endif
+    Serial.println(F("BMP390 init fail\n\n"));
     while(1);    // 永久停在這裡
   }
 
@@ -202,53 +185,11 @@ void Show7Led(int _no){
 }
 
 double GetPressure(){
-    const int TIMES = 20;  
-    double _total = 0;
-    int cnt = 0;
-    while(cnt < TIMES){
-        double _p = GetPressureSingle();   
-        if(_p>900 && _p<1100){
-            _total += _p;
-            cnt++;
-        }
-        delay(3);
-    }
-//    for(int i=0; i<TIMES; i++){   
-//        _total += GetPressureSingle();        
-//        delay(5);
-//    }
-    double outputP = _total / (double)TIMES ;
-    Serial.print(F("Get Avg pressure: "));
-    Serial.println(outputP);   
-    return outputP;  
-}
-
-double GetPressureSingle(){
-  char _bmpStatus;
-  double _P=0, _T=0;
-  _bmpStatus = bmp180.startTemperature();
-  if (_bmpStatus != 0){
-    delay(_bmpStatus);
-    _bmpStatus = bmp180.getTemperature(_T);
-    if (_bmpStatus != 0){      
-      // 參數設定從 0 到 3 (最高的解析度，等待較久)
-      _bmpStatus = bmp180.startPressure(3);
-      if (_bmpStatus != 0){
-        delay(_bmpStatus);
-        _bmpStatus = bmp180.getPressure(_P, _T);
-        if (_bmpStatus != 0){
-          //Serial.print(F("absolute pressure: "));
-          //Serial.println(_P);     
-        }        
-        else Serial.println(F("error retrieving pressure measurement\n"));
-      }
-      else Serial.println(F("error starting pressure measurement\n"));
-    }
-    else Serial.println(F("error retrieving temperature measurement\n"));
+  if (! bmp.performReading()) {
+    Serial.println("Failed to perform reading :(");
+    return 0.0;
   }
-  else Serial.println(F("error starting temperature measurement\n"));
-
-  return _P;
+  return bmp.pressure / 100.0F;
 }
 
 int GetFloor(float distance) {
@@ -304,37 +245,17 @@ int GetFloor(float distance) {
   return floors[targetIdx].number;
 }
 
-void loop(){
-  //Serial.println();
-  //double _distance = -999;
-  
-#ifdef DEBUG
-    if (Serial.available() > 0) {
-        double _distance = Serial.parseFloat(); 
-        if(_distance != 0){         
-            // 換算成 現在樓層
-            int _floor = GetFloor(_distance);
-              
-            // 設定現在樓層，開始計時，檢查是否需要重新校正
-            SetFloor(_floor);
-          
-            // 顯示                     
-            ShowOLED(_floor, 0, _distance);           
-            delay(200);  
-        }
-    }
-      
-#else 
+void loop(){  
     // 取得 現在壓力
     double _pressure = GetPressure();
-    if(_pressure<900 || _pressure>1100){
+    if(_pressure<900.0 || _pressure>1100.0){
       delay(200);
       return;
     }
     
     // 取得 現在高度 與 標準樓層 的距離
-    double _distance = GetDistance(_pressure); 
-    if(_distance<-50 || _distance>50){
+    double _distance = bmp.readAltitude(stdPressure);
+    if(_distance<-50.0 || _distance>50.0){
       delay(200);
       return;
     }
@@ -345,73 +266,16 @@ void loop(){
       delay(200);
       return;
     }
-      
-    // 設定現在樓層，開始計時，檢查是否需要重新校正
-    SetFloor(_floor);
-  
-    // 顯示
-    Show7Led(_floor);
-    ShowOLED(_floor, _pressure, _distance);
-    //ShowOLED(_floor, 0, _distance);
-      
-    delay(200); 
-#endif  
-}
-
-void ShowOLED(int _floor, double _pressure, double _distance){
-#ifdef ENABLE_OLED 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.setCursor(0,0);
-
-    display.print("STD Floor: ");  
-    if(stdFloorNo > 0){    
-      display.print(stdFloorNo); 
-      display.print(" F");  
-    }
-    else{
-      if(stdFloorNo == 0) { display.print("B1"); }
-      if(stdFloorNo == -1) { display.print("B2"); }
-    }
     
-    display.println();    
-//    display.print("STD Presr: ");  
-//    display.print(stdPressure);  
-//    display.println();    
+    SetFloor(_floor);  // 設定現在樓層，開始計時，檢查是否需要重新校正 
+    Show7Led(_floor);  // 顯示
 
-    display.println();    
-    
-    display.print("Now Floor: ");  
-    if(_floor > 0){    
-      display.print(_floor); 
-      display.print(" F");  
-    }
-    else{
-      if(_floor == 0) { display.print("B1"); }
-      if(_floor == -1) { display.print("B2"); }
-    }  
-    display.println(); 
-    
-//    display.print("Now Presr: ");  
-//    display.print(_pressure);  
-//    display.println();    
-    
-    display.print("Distance:  ");  
-    display.print(_distance);  
-    display.print(" m"); 
-    display.println();    
-      
-    display.display();  
-#endif
-}
+    Serial.print("_pressure = ");   Serial.print(_pressure);  
+    Serial.print(", _distance = "); Serial.print(_distance); 
+    Serial.print(", _floor = "); Serial.print(_floor); 
+    Serial.println();
 
-double GetDistance(double _pressure){
-  double _distance = bmp180.altitude(_pressure, stdPressure);
-  Serial.print(F("distance: "));
-  Serial.print(_distance, 2);
-  Serial.println(F(" meters"));  
-  return _distance;
+    delay(1);
 }
 
 void SetFloor(int _floor){
