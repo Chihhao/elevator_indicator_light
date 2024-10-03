@@ -1,18 +1,20 @@
 #include <SPI.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
 #include "Adafruit_BMP3XX.h"  // https://github.com/adafruit/Adafruit_BMP3XX
 
-// 當電梯在任一樓層超過30秒，執行重新校正
-#define WAIT_TIME_TO_CAL 30000  //30s
+// 當電梯在任一樓層超過60秒，執行重新校正
+#define WAIT_TIME_TO_CAL 60  //60s
+#define SECONDS_4 4000  //4s
 
 Adafruit_BMP3XX bmp;
 
-int currentFloorNo = -99;
+int toBeStdFloorNo = -99;
 unsigned long timerStartTime=0;
+unsigned long timerStartTime4s=0;
 
 int stdFloorNo = 6;
-double stdPressure;
+float stdPressure;
+float _pressure4s;
 
 // 樓層資訊
 struct Floor {
@@ -21,7 +23,7 @@ struct Floor {
 };
 
 const int numFloors = 11;  // 總樓層數
-const float B2_B1_DISTANCE = 2.6;
+const float B2_B1_DISTANCE = 2.7;
 const float B1_1F_DISTANCE = 4.5;
 const float _1F_2F_DISTANCE = 3.5;
 const float _2F_3F_DISTANCE = 4.6;
@@ -184,13 +186,21 @@ void Show7Led(int _no){
   
 }
 
-double GetPressure(){
+float GetPressure(){
   if (! bmp.performReading()) {
     Serial.println("Failed to perform reading :(");
     return 0.0;
   }
   return bmp.pressure / 100.0F;
 }
+
+float GetDistance(float _p) {
+  return 44330.0 * (1.0 - pow(_p / stdPressure, 0.1903));
+}
+
+//float GetDistance(){
+//  return bmp.readAltitude(stdPressure);
+//}
 
 int GetFloor(float distance) {
   int currentIdx = -1;
@@ -247,14 +257,14 @@ int GetFloor(float distance) {
 
 void loop(){  
     // 取得 現在壓力
-    double _pressure = GetPressure();
+    float _pressure = GetPressure();
     if(_pressure<900.0 || _pressure>1100.0){
       delay(200);
       return;
     }
     
     // 取得 現在高度 與 標準樓層 的距離
-    double _distance = bmp.readAltitude(stdPressure);
+    float _distance = GetDistance(_pressure);
     if(_distance<-50.0 || _distance>50.0){
       delay(200);
       return;
@@ -266,10 +276,13 @@ void loop(){
       delay(200);
       return;
     }
-    
-    SetFloor(_floor);  // 設定現在樓層，開始計時，檢查是否需要重新校正 
     Show7Led(_floor);  // 顯示
 
+
+
+    
+    
+    SetFloor(_floor);  // 設定現在樓層，開始計時，檢查是否需要重新校正 
     Serial.print("_pressure = ");   Serial.print(_pressure);  
     Serial.print(", _distance = "); Serial.print(_distance); 
     Serial.print(", _floor = "); Serial.print(_floor); 
@@ -279,29 +292,57 @@ void loop(){
 }
 
 void SetFloor(int _floor){
-  if(_floor != currentFloorNo){
-    currentFloorNo = _floor;
+  
+  // 每四秒紀錄壓力，用來確認電梯是否正在移動
+  if( TimerGetEscapeTime4s() > SECONDS_4){
+      _pressure4s = GetPressure();
+      TimerReStart4s(); 
+  }
+
+  // 若現高度與四秒前的高度差距過大(>1m)，則判斷為正在移動
+  float _pressure = GetPressure();
+  float _distance = GetDistance(_pressure);
+  float _distance4s = GetDistance(_distance4s);
+  if(fabs(_distance-_distance4s) > 1.0){
+      TimerReStart4s(); 
+      return;    
+  }
+
+  // 當樓層變更時，開始計時
+  if(_floor != toBeStdFloorNo){
+    toBeStdFloorNo = _floor;
+    TimerReStart();
+    return;
+  }
+
+  // 電梯停留超過30秒
+  if( TimerGetEscapeTime() > WAIT_TIME_TO_CAL){    
+    // 執行校正
+    stdFloorNo = _floor;
+    stdPressure = GetPressure();
+    Serial.print(F("Set stdFloorNo: ")); Serial.println(stdFloorNo);
+    Serial.print(F("Set stdPressure: ")); Serial.println(stdPressure, 2);
+
+    // 校正後重新計時
     TimerReStart();    
   }
-  else {
-    if( TimerGetEscapeTime() > WAIT_TIME_TO_CAL){
-      // 執行校正
-      stdFloorNo = _floor;
-      stdPressure = GetPressure();
-      Serial.print(F("Set stdFloorNo: ")); Serial.println(stdFloorNo);
-      Serial.print(F("Set stdPressure: ")); Serial.println(stdPressure, 2);
-
-      // 校正後重新計時
-      TimerReStart();    
-    }
-  }  
+    
 }
 
 void TimerReStart(){
   timerStartTime = millis();
 }
 
+void TimerReStart4s(){
+  timerStartTime4s = millis();
+}
+
 unsigned long TimerGetEscapeTime(){
   unsigned long current_time = millis();
   return current_time - timerStartTime;
+}
+
+unsigned long TimerGetEscapeTime4s(){
+  unsigned long current_time = millis();
+  return current_time - timerStartTime4s;
 }
